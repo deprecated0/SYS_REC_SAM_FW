@@ -1,35 +1,42 @@
-# Общие настройки
 random_state: 42
-relevance_threshold: 4    # оценка >= 4 считается релевантным взаимодействием
-test_holdout: 2           # сколько оценок прячем в тест у каждого пользователя
-min_train_ratings: 6      # holdout делаем только у пользователей с >= 6 оценками
-n_recs: 10                # длина рекомендации
-chunk: 4096               # размер чанка пользователей при скоринге
-
-# Популярные книги
-min_ratings_popular: 100  # порог числа оценок для модели на основе популярности
-
-# Контентная модель
-content:
-  min_df: 3
-
-# Item-Based CF
+relevance_threshold: 4
+min_train_ratings: 6
+n_val: 1
+n_test: 2
+n_recs: 10
+chunk: 4096
+min_ratings_popular: 100
 top_k_neighbours: 20
 shrinkage_lambda: 10.0
 
-# SVD
+content:
+  min_df: 3
+
 svd:
   n_factors: 100
   n_epochs: 20
 
-# Гибрид
-hybrid:
-  w_main: 0.5
-  w_prior: 0.05
+features:
+  n_clusters: 20
 
-# Эксперимент с холодным стартом
-cold:
-  n_users: 4000
-  keep_ratings: 3
+hybrid:
+  pool_per_model: 100
+  weight_step: 0.25
+
+diversity:
+  max_per_author: 3
+  max_per_cluster: 5
+
+reranker:
+  n_pos: 12
+  n_neg: 24
+  n_epochs: 3
+  batch: 16384
+  lr: 0.001
+  emb_dim: 16
+  rerank_pool: 200
+
+pipeline:
+  user_sample: 8000
   svd_epochs: 10
-  w_content: 0.6
+  nn_epochs: 2

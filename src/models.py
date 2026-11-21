@@ -1,4 +1,6 @@
-"""Модели: популярность, контентная TF-IDF, Item-Based CF, SVD, гибриды."""
+"""Модели: популярность, TF-IDF, ItemCF, SVD, гибриды."""
+
+import itertools
 
 import numpy as np
 import pandas as pd
@@ -8,7 +10,8 @@ from sklearn.preprocessing import normalize
 from surprise import SVD as SurpriseSVD
 from surprise import Dataset, Reader
 
-# Служебные полки: описывают поведение читателя, а не содержание книги
+from .metrics import topn_rows
+
 META_TAGS = {
     "to-read",
     "currently-reading",
@@ -56,7 +59,6 @@ META_TAGS = {
 
 
 def popularity_scores(train_df, n_books, min_ratings):
-    """Скор книги равен среднему рейтингу при достаточном числе оценок, иначе -1."""
     stats = train_df.groupby("book_idx").agg(
         mean=("rating", "mean"), n=("rating", "size")
     )
@@ -67,19 +69,16 @@ def popularity_scores(train_df, n_books, min_ratings):
 
 
 def find_demo_book(books, pattern):
-    """Возвращает books.id первой книги, в названии которой встречается паттерн."""
     row = books[books.title.str.contains(pattern, case=False, na=False, regex=False)]
     return int(row["id"].iloc[0])
 
 
 def build_book_profiles(books, bt, book_ids, bid2i, meta_tags):
-    """Текстовый профиль книги: слова названия плюс очищенные теги."""
     n_books = len(book_ids)
     books_by_id = books.set_index("id")
     titles = books_by_id.loc[book_ids, "original_title"].fillna(
         books_by_id.loc[book_ids, "title"]
     )
-
     bt = bt.copy()
     bt["book_idx"] = bt["id"].map(bid2i)
     bt = bt[bt["book_idx"].notna()]
@@ -89,7 +88,6 @@ def build_book_profiles(books, bt, book_ids, bid2i, meta_tags):
         .groupby("book_idx")["tag_clean"]
         .agg(" ".join)
     )
-
     titles_clean = (
         titles.str.lower().str.replace(r"[^\w\s]", " ", regex=True).fillna("")
     )
@@ -100,16 +98,13 @@ def build_book_profiles(books, bt, book_ids, bid2i, meta_tags):
 
 
 def fit_item_profiles(profiles, min_df=3):
-    """TF-IDF векторизация профилей с L2-нормировкой: косинус равен скалярному произведению."""
     tfidf = TfidfVectorizer(
         min_df=min_df, sublinear_tf=True, token_pattern=r"(?u)\b\w\w+\b"
     )
-    item_profiles = tfidf.fit_transform(profiles.values)
-    return normalize(item_profiles)
+    return normalize(tfidf.fit_transform(profiles.values))
 
 
 def get_similar_books(item_profiles, idx, n):
-    """n ближайших книг по косинусной близости профилей."""
     sims = (item_profiles @ item_profiles[idx].T).toarray().ravel()
     sims[idx] = -1.0
     top = np.argsort(-sims)[:n]
@@ -117,7 +112,6 @@ def get_similar_books(item_profiles, idx, n):
 
 
 def build_favorites(df, n_users, n_books, relevance_threshold):
-    """Нормированная матрица любимых книг пользователя (оценки >= порога)."""
     fav = df[df.rating >= relevance_threshold]
     no_fav = set(df.user_idx.unique()) - set(fav.user_idx.unique())
     if no_fav:
@@ -130,8 +124,6 @@ def build_favorites(df, n_users, n_books, relevance_threshold):
 
 
 def make_content_scorer(fav_csr, item_profiles, fallback_scores):
-    """Косинус между профилем пользователя и профилем каждой книги."""
-
     def score_fn(user_indices):
         prof = fav_csr[user_indices] @ item_profiles
         scores = np.asarray((prof @ item_profiles.T).todense(), dtype=np.float32)
@@ -144,16 +136,14 @@ def make_content_scorer(fav_csr, item_profiles, fallback_scores):
 
 
 def keep_topk_per_row(S, k):
-    """Оставляет в каждой строке разреженной матрицы только k максимальных значений."""
     S = S.tocsr()
     rows, cols, vals = [], [], []
     indptr, indices, data = S.indptr, S.indices, S.data
     for i in range(S.shape[0]):
         lo, hi = indptr[i], indptr[i + 1]
-        if hi - lo > k:
-            sel = np.argpartition(-data[lo:hi], k)[:k]
-        else:
-            sel = np.arange(hi - lo)
+        sel = (
+            np.argpartition(-data[lo:hi], k)[:k] if hi - lo > k else np.arange(hi - lo)
+        )
         rows.append(np.full(len(sel), i))
         cols.append(indices[lo:hi][sel])
         vals.append(data[lo:hi][sel])
@@ -164,7 +154,6 @@ def keep_topk_per_row(S, k):
 
 
 def item_similarity(R, lmbda=10.0, k=20):
-    """Косинусные близости книг со сжатием; в каждой строке остаётся топ-k соседей."""
     item_users = normalize(R.T.tocsr())
     S = (item_users @ item_users.T).tocsr()
     co = (R.sign().T @ R.sign()).tocsr()
@@ -177,11 +166,9 @@ def item_similarity(R, lmbda=10.0, k=20):
 
 
 def predict_rating_itemcf(user_idx, book_idx, S_topk, R_train, item_mean, k):
-    """Прогноз оценки: взвешенное среднее оценок пользователя по соседям книги."""
     neighbours = S_topk.getrow(book_idx)
     order = np.argsort(-neighbours.data)[:k]
-    nb_idx = neighbours.indices[order]
-    nb_sim = neighbours.data[order]
+    nb_idx, nb_sim = neighbours.indices[order], neighbours.data[order]
     user_row = R_train.getrow(user_idx)
     rated = dict(zip(user_row.indices, user_row.data))
     common = [(j, s) for j, s in zip(nb_idx, nb_sim) if j in rated]
@@ -193,7 +180,6 @@ def predict_rating_itemcf(user_idx, book_idx, S_topk, R_train, item_mean, k):
 
 
 def make_itemcf_scorer(R, S_k, item_mean):
-    """Скоринг всех книг для списка пользователей: взвешенная сумма близостей."""
     Rb = R.sign()
     S_kt = S_k.T.tocsr()
 
@@ -210,35 +196,26 @@ def make_itemcf_scorer(R, S_k, item_mean):
 
 
 def fit_svd(train_df, user_ids, book_ids, n_factors, n_epochs, seed):
-    """Обучает surprise.SVD и раскладывает параметры в массивы по сквозным индексам."""
     reader = Reader(rating_scale=(1, 5))
     data = Dataset.load_from_df(train_df[["user_id", "book_id", "rating"]], reader)
     trainset = data.build_full_trainset()
     algo = SurpriseSVD(n_factors=n_factors, n_epochs=n_epochs, random_state=seed)
     algo.fit(trainset)
-
-    # Отображения "сырой" идентификатор -> внутренний. Строим их через
-    # обратное преобразование, чтобы не зависеть от версии библиотеки:
-    # в новых версиях атрибуты raw2inner_id_users/raw2inner_id_items удалены.
-    raw2inner_u = {trainset.to_raw_uid(iu): iu for iu in trainset.all_users()}
-    raw2inner_i = {trainset.to_raw_iid(ii): ii for ii in trainset.all_items()}
-
-    n_users, n_books = len(user_ids), len(book_ids)
-    u_inner = np.array([raw2inner_u.get(int(u), -1) for u in user_ids])
-    i_inner = np.array([raw2inner_i.get(int(b), -1) for b in book_ids])
-
-    bu = np.zeros(n_users, np.float32)
-    pu = np.zeros((n_users, n_factors), np.float32)
-    mask_u = u_inner >= 0
-    bu[mask_u] = algo.bu[u_inner[mask_u]]
-    pu[mask_u] = algo.pu[u_inner[mask_u]]
-
-    bi = np.zeros(n_books, np.float32)
-    qi = np.zeros((n_books, n_factors), np.float32)
-    mask_i = i_inner >= 0
-    bi[mask_i] = algo.bi[i_inner[mask_i]]
-    qi[mask_i] = algo.qi[i_inner[mask_i]]
-
+    raw2u = {trainset.to_raw_uid(iu): iu for iu in trainset.all_users()}
+    raw2i = {trainset.to_raw_iid(ii): ii for ii in trainset.all_items()}
+    n_u, n_b = len(user_ids), len(book_ids)
+    u_inner = np.array([raw2u.get(int(u), -1) for u in user_ids])
+    i_inner = np.array([raw2i.get(int(b), -1) for b in book_ids])
+    bu = np.zeros(n_u, np.float32)
+    pu = np.zeros((n_u, n_factors), np.float32)
+    mu = u_inner >= 0
+    bu[mu] = algo.bu[u_inner[mu]]
+    pu[mu] = algo.pu[u_inner[mu]]
+    bi = np.zeros(n_b, np.float32)
+    qi = np.zeros((n_b, n_factors), np.float32)
+    mi = i_inner >= 0
+    bi[mi] = algo.bi[i_inner[mi]]
+    qi[mi] = algo.qi[i_inner[mi]]
     return {
         "mu": np.float32(trainset.global_mean),
         "bu": bu,
@@ -249,7 +226,6 @@ def fit_svd(train_df, user_ids, book_ids, n_factors, n_epochs, seed):
 
 
 def make_svd_scorer(bundle):
-    """Полный прогноз SVD: глобальное среднее + смещения + факторы."""
     mu, bu, bi, pu, qi = (
         bundle["mu"],
         bundle["bu"],
@@ -267,7 +243,6 @@ def make_svd_scorer(bundle):
 
 
 def predict_pairs(score_fn, user_idx, book_idx, chunk):
-    """Предсказания для списка пар (пользователь, книга), чанками без плотной матрицы."""
     order = np.argsort(user_idx, kind="stable")
     us = user_idx[order]
     out = np.empty(len(user_idx), np.float32)
@@ -289,9 +264,11 @@ def z_norm(x):
     return (x - mu) / (sd + 1e-9)
 
 
-def make_hybrid_scorer(score_a, score_b, prior, w_a=0.5, w_prior=0.05):
-    """Смесь двух скорингов и априорного сигнала, всё через z-нормировку по кандидатам."""
+def z_norm_row(x):
+    return (x - x.mean(1, keepdims=True)) / (x.std(1, keepdims=True) + 1e-9)
 
+
+def make_hybrid_scorer(score_a, score_b, prior, w_a=0.5, w_prior=0.05):
     def score_fn(user_indices):
         a = z_norm(np.asarray(score_a(user_indices), np.float32))
         b = z_norm(np.asarray(score_b(user_indices), np.float32))
@@ -299,3 +276,64 @@ def make_hybrid_scorer(score_a, score_b, prior, w_a=0.5, w_prior=0.05):
         return (w_a * a + (1 - w_a - w_prior) * b + w_prior * c).astype(np.float32)
 
     return score_fn
+
+
+def build_pool(users, score_fns, seen_csr, n_books, top_per_model, pad, chunk):
+    names = list(score_fns)
+    pool_books = np.full((len(users), pad), -1, np.int32)
+    pool_z = np.zeros((len(users), pad, len(names)), np.float32)
+    for st in range(0, len(users), chunk):
+        idx = users[st : st + chunk]
+        seen = seen_csr[idx].toarray().astype(bool)
+        mask = np.zeros((len(idx), n_books), bool)
+        zs = []
+        for fn in score_fns.values():
+            s = np.asarray(fn(idx), np.float32)
+            z = z_norm_row(s)
+            top = topn_rows(np.where(seen, -np.inf, z), top_per_model)
+            mask[np.arange(len(idx))[:, None], top] = True
+            zs.append(z)
+        for r in range(len(idx)):
+            cols = np.flatnonzero(mask[r])
+            pool_books[st + r, : len(cols)] = cols
+            for mi, z in enumerate(zs):
+                pool_z[st + r, : len(cols), mi] = z[r, cols]
+    return pool_books, pool_z
+
+
+def fast_metrics(users, pool_books, scores, rel, n_recs, ks=(5, 10)):
+    disc = 1.0 / np.log2(np.arange(2, n_recs + 2))
+    disc_cum = np.concatenate([[0.0], np.cumsum(disc)])
+    part = np.argpartition(
+        -np.where(pool_books < 0, -np.inf, scores), n_recs - 1, axis=1
+    )[:, :n_recs]
+    order = np.argsort(
+        np.take_along_axis(-np.where(pool_books < 0, -np.inf, scores), part, axis=1),
+        axis=1,
+        kind="stable",
+    )
+    top = np.take_along_axis(part, order, axis=1)
+    cand = np.take_along_axis(pool_books, top, axis=1)
+    hits = np.asarray(rel[np.repeat(users, n_recs), cand.ravel()]).ravel()
+    hits = hits.astype(np.float64).reshape(len(users), n_recs)
+    n_rel = np.asarray(rel.sum(1)).ravel()[users]
+    out = {}
+    for k in ks:
+        hk = hits[:, :k]
+        out[f"P@{k}"] = float((hk.sum(1) / k).mean())
+        out[f"R@{k}"] = float(
+            np.divide(
+                hk.sum(1), n_rel, out=np.zeros_like(n_rel), where=n_rel > 0
+            ).mean()
+        )
+        dcg = (hits[:, :k] * disc[:k]).sum(1)
+        idcg = disc_cum[np.clip(n_rel, 0, k).astype(int)]
+        out[f"nDCG@{k}"] = float(
+            np.divide(dcg, idcg, out=np.zeros_like(dcg), where=idcg > 0).mean()
+        )
+    return out
+
+
+def weight_combos(step):
+    steps = np.arange(0, 1.0 + step / 2, step)
+    return [w for w in itertools.product(steps, repeat=4) if abs(sum(w) - 1) < 1e-9]

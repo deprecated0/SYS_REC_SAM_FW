@@ -1,4 +1,4 @@
-"""Стадия 3. Базовые модели: популярная и контентная (TF-IDF)."""
+"""Стадия 3. Популярная и контентная модели."""
 
 import numpy as np
 import pandas as pd
@@ -27,25 +27,21 @@ from .models import (
 def main():
     params = load_params()
     ensure_dirs()
-
     train = pd.read_csv(SPLIT_DIR / "train.csv")
     user_ids, book_ids = load_index_maps(SPLIT_DIR / "index_maps.npz")
     n_users, n_books = len(user_ids), len(book_ids)
     bid2i = make_id2idx(book_ids)
-
     _, books, tags, book_tags = load_raw_data()
     bt = prepare_book_tags(books, book_tags, tags)
     books_by_id = books.set_index("id")
 
-    # Популярная модель: средний рейтинг при достаточном числе оценок
     pop_scores, pop_stats = popularity_scores(
         train, n_books, params["min_ratings_popular"]
     )
     np.save(MODELS_DIR / "pop_scores.npy", pop_scores)
     pop_stats.to_csv(TABLES_DIR / "pop_stats.csv", index_label="book_idx")
-    n_pass = int((pop_scores > 0).sum())
     print(
-        f"Книг проходят порог {params['min_ratings_popular']} оценок: {n_pass} из {n_books}"
+        f"Проходят порог {params['min_ratings_popular']} оценок: {(pop_scores > 0).sum()} из {n_books}"
     )
 
     pop_top = (
@@ -60,13 +56,10 @@ def main():
         TABLES_DIR / "popular_top10_train.csv", index=False
     )
 
-    # Контентная модель: профиль книги из названия и тегов
     profiles = build_book_profiles(books, bt, book_ids, bid2i, META_TAGS)
     item_profiles = fit_item_profiles(profiles, min_df=params["content"]["min_df"])
     save_npz(MODELS_DIR / "item_profiles.npz", item_profiles)
-    print(
-        f"Матрица профилей: {item_profiles.shape}, ненулевых элементов: {item_profiles.nnz}"
-    )
+    print(f"Матрица профилей: {item_profiles.shape}, nnz={item_profiles.nnz}")
 
     demo_rows = []
     for pattern in ("Hunger Games", "Hobbit", "1984"):
@@ -74,10 +67,8 @@ def main():
         idx = bid2i[book_id]
         top_idx, sims = get_similar_books(item_profiles, idx, n=5)
         source_title = books_by_id.loc[book_id, "title"]
-        print(f'Похожие на "{source_title}" (book_id={book_id}):')
         for rank, (j, s) in enumerate(zip(top_idx, sims), start=1):
             nb_id = int(book_ids[j])
-            print(f"  {rank}. {books_by_id.loc[nb_id, 'title']} (cos={s:.3f})")
             demo_rows.append(
                 {
                     "source_book_id": book_id,
@@ -91,10 +82,9 @@ def main():
             )
     pd.DataFrame(demo_rows).to_csv(TABLES_DIR / "similar_books_demo.csv", index=False)
 
-    # Профили пользователей по любимым книгам
     fav_train = build_favorites(train, n_users, n_books, params["relevance_threshold"])
     save_npz(MODELS_DIR / "fav_train.npz", fav_train)
-    print(f"fav_train: {fav_train.shape}, ненулевых элементов: {fav_train.nnz}")
+    print(f"fav_train: {fav_train.shape}, nnz={fav_train.nnz}")
 
 
 if __name__ == "__main__":

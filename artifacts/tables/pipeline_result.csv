@@ -1,0 +1,7 @@
+model,nDCG@10 (перезапуск пайплайна)
+content,0.1057
+itemcf,0.0239
+svd_pq,0.0008
+pop,0.0002
+hybrid,0.1057
+hybrid + W&D rerank,0.104

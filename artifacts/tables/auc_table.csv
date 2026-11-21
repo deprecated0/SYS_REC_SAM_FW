@@ -1,0 +1,3 @@
+model,AUC_val
+Wide & Deep,0.5824769444444444
+wide-only,0.6186352222222222

@@ -31,10 +31,12 @@ stages:
       - src/io_utils.py
     params:
       - random_state
-      - test_holdout
       - min_train_ratings
+      - n_val
+      - n_test
     outs:
       - artifacts/split/train.csv
+      - artifacts/split/val.csv
       - artifacts/split/test.csv
       - artifacts/split/index_maps.npz
       - artifacts/tables/split_summary.json
@@ -112,7 +114,6 @@ stages:
   evaluate:
     cmd: python -m src.stage6_evaluate
     deps:
-      - artifacts/split/train.csv
       - artifacts/split/test.csv
       - artifacts/split/index_maps.npz
       - artifacts/models/pop_scores.npy
@@ -139,11 +140,11 @@ stages:
     plots:
       - artifacts/figures/metrics_bar.png
 
-  hybrid_cold:
-    cmd: python -m src.stage7_hybrid_cold
+  hybrid:
+    cmd: python -m src.stage7_hybrid
     deps:
-      - artifacts/tables/metrics_main.csv
       - artifacts/split/train.csv
+      - artifacts/split/val.csv
       - artifacts/split/test.csv
       - artifacts/split/index_maps.npz
       - artifacts/models/pop_scores.npy
@@ -153,11 +154,16 @@ stages:
       - artifacts/models/S_topk.npz
       - artifacts/models/item_mean.npy
       - artifacts/models/svd_bundle.npz
-      - src/stage7_hybrid_cold.py
+      - artifacts/tables/metrics_main.csv
+      - data/books.csv
+      - data/tags.csv
+      - data/book_tags.csv
+      - src/stage7_hybrid.py
       - src/config.py
       - src/io_utils.py
       - src/metrics.py
       - src/models.py
+      - src/features.py
     params:
       - random_state
       - relevance_threshold
@@ -166,14 +172,110 @@ stages:
       - min_ratings_popular
       - top_k_neighbours
       - svd.n_factors
-      - hybrid.w_main
-      - hybrid.w_prior
-      - cold.n_users
-      - cold.keep_ratings
-      - cold.svd_epochs
-      - cold.w_content
+      - features.n_clusters
+      - hybrid.pool_per_model
+      - hybrid.weight_step
+      - diversity.max_per_author
+      - diversity.max_per_cluster
     metrics:
-      - artifacts/tables/metrics_full.csv
-      - artifacts/tables/metrics_cold.csv
+      - artifacts/tables/metrics_hybrid.csv
     plots:
       - artifacts/figures/metrics_final.png
+      - artifacts/figures/segment_bar.png
+    outs:
+      - artifacts/models/pool_users.npy
+      - artifacts/models/pool_books.npy
+      - artifacts/models/pool_z.npy
+      - artifacts/tables/hybrid_weights.csv
+      - artifacts/tables/seg_weights.csv
+      - artifacts/tables/segment_table.csv
+      - artifacts/tables/diversity_table.csv
+
+  reranker:
+    cmd: python -m src.stage8_reranker
+    deps:
+      - artifacts/split/train.csv
+      - artifacts/split/val.csv
+      - artifacts/split/test.csv
+      - artifacts/split/index_maps.npz
+      - artifacts/models/pop_scores.npy
+      - artifacts/models/item_profiles.npz
+      - artifacts/models/fav_train.npz
+      - artifacts/models/R_train.npz
+      - artifacts/models/S_topk.npz
+      - artifacts/models/item_mean.npy
+      - artifacts/models/svd_bundle.npz
+      - artifacts/models/pool_users.npy
+      - artifacts/models/pool_books.npy
+      - artifacts/models/pool_z.npy
+      - artifacts/tables/hybrid_weights.csv
+      - artifacts/tables/metrics_hybrid.csv
+      - data/books.csv
+      - data/tags.csv
+      - data/book_tags.csv
+      - src/stage8_reranker.py
+      - src/config.py
+      - src/io_utils.py
+      - src/metrics.py
+      - src/models.py
+      - src/features.py
+      - src/nn_reranker.py
+    params:
+      - random_state
+      - relevance_threshold
+      - n_recs
+      - chunk
+      - top_k_neighbours
+      - features.n_clusters
+      - reranker.n_pos
+      - reranker.n_neg
+      - reranker.n_epochs
+      - reranker.batch
+      - reranker.lr
+      - reranker.emb_dim
+      - reranker.rerank_pool
+    metrics:
+      - artifacts/tables/metrics_reranker.csv
+      - artifacts/tables/auc_table.csv
+    outs:
+      - artifacts/models/reranker_wide_deep.pt
+      - artifacts/models/reranker_wide_only.pt
+
+  pipeline_rerun:
+    cmd: python -m src.stage9_pipeline
+    deps:
+      - data/ratings.csv
+      - data/books.csv
+      - data/tags.csv
+      - data/book_tags.csv
+      - src/stage9_pipeline.py
+      - src/config.py
+      - src/io_utils.py
+      - src/metrics.py
+      - src/models.py
+      - src/features.py
+      - src/nn_reranker.py
+    params:
+      - random_state
+      - relevance_threshold
+      - min_train_ratings
+      - n_val
+      - n_test
+      - n_recs
+      - chunk
+      - min_ratings_popular
+      - top_k_neighbours
+      - shrinkage_lambda
+      - content.min_df
+      - svd.n_factors
+      - features.n_clusters
+      - hybrid.pool_per_model
+      - hybrid.weight_step
+      - reranker.n_pos
+      - reranker.n_neg
+      - reranker.rerank_pool
+      - pipeline.user_sample
+      - pipeline.svd_epochs
+      - pipeline.nn_epochs
+    metrics:
+      - artifacts/tables/pipeline_result.csv

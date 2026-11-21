@@ -1,0 +1,11 @@
+{
+  "train_size": 882161,
+  "val_size": 32439,
+  "test_size": 64878,
+  "val_users": 32439,
+  "test_users": 32439,
+  "total_users": 53424,
+  "total_books": 10000,
+  "users_lt5_train": 22351,
+  "users_lt5_train_percent": 41.8
+}
