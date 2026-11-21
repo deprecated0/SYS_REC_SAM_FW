@@ -213,7 +213,9 @@ def main():
     hyb_simple = np.tensordot(pool_z[sub_test], best_w, axes=([2], [0]))
     seg_arr = uf.segment.values[eval_users_t]
     hyb_seg = np.zeros((len(eval_users_t), pool_pad), np.float32)
-    seg_arr_clean = np.array([str(s) if pd.notna(s) else "unknown" for s in seg_arr], dtype=object)
+    seg_arr_clean = np.array(
+        [str(s) if pd.notna(s) else "unknown" for s in seg_arr], dtype=object
+    )
     for seg in np.unique(seg_arr_clean):
         m = seg_arr_clean == seg
         w = seg_weights.get(seg, best_w)
